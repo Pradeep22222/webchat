@@ -3,10 +3,12 @@ import { useState, useEffect, useRef } from "react";
 import { createSocket } from "./socket";
 import "./App.css";
 
-const API_URL =
-    import.meta.env.BACKEND_API_URL ;
+
+    const API_URL = import.meta.env.VITE_BACKEND_API_URL;
 
 function App() {
+
+
 
     const [user, setUser] = useState(null);
     const [token, setToken] = useState(null);

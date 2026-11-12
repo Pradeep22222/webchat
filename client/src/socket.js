@@ -1,7 +1,6 @@
 import { io } from "socket.io-client";
 
-const API_URL =
-    import.meta.env.BACKEND_API_URL;
+const API_URL = import.meta.env.VITE_BACKEND_API_URL;
 
 export function createSocket(token) {
 
