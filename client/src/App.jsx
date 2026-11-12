@@ -4,7 +4,7 @@ import { createSocket } from "./socket";
 import "./App.css";
 
 const API_URL =
-    import.meta.env.BACKEND_API_URL || "http://localhost:5000";
+    import.meta.env.BACKEND_API_URL ;
 
 function App() {
 
