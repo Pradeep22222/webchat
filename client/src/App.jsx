@@ -431,7 +431,7 @@ function App() {
                 <main className="messages-area">
 
                     <div className="history-label">
-                        <span>Messages from the last 60 seconds</span>
+                        <span>Older messages are deleted</span>
                     </div>
 
                     {messages.length === 0 && (
