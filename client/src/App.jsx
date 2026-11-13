@@ -1,14 +1,11 @@
 
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { createSocket } from "./socket";
 import "./App.css";
 
-
-    const API_URL = import.meta.env.VITE_BACKEND_API_URL;
+const API_URL = import.meta.env.VITE_BACKEND_API_URL;
 
 function App() {
-
-
 
     const [user, setUser] = useState(null);
     const [token, setToken] = useState(null);
@@ -26,7 +23,10 @@ function App() {
     const socketRef = useRef(null);
     const messagesEndRef = useRef(null);
 
-    // Scroll to latest message
+    // Prevent unnecessary simultaneous message requests.
+    const refreshPromiseRef = useRef(null);
+
+    // Scroll to latest message.
     useEffect(() => {
 
         messagesEndRef.current?.scrollIntoView({
@@ -34,6 +34,105 @@ function App() {
         });
 
     }, [messages]);
+
+
+    // FETCH AND SYNCHRONISE MESSAGES
+    const refreshMessages = useCallback(async () => {
+
+        if (!token) return;
+
+        // Reuse an existing request if one is already running.
+        if (refreshPromiseRef.current) {
+            return refreshPromiseRef.current;
+        }
+
+        const request = (async () => {
+
+            try {
+
+                console.log("Synchronising messages...");
+
+                const response = await fetch(
+                    `${API_URL}/api/messages`,
+                    {
+                        headers: {
+                            Authorization: `Bearer ${token}`
+                        }
+                    }
+                );
+
+                const data = await response.json();
+
+                if (!response.ok) {
+                    throw new Error(data.message || "Unable to retrieve messages");
+                }
+
+                const now = Date.now();
+
+                // Merge the server response with any messages
+                // received through Socket.IO during the request.
+                setMessages(previous => {
+
+                    const messageMap = new Map();
+
+                    // Server response is authoritative.
+                    data.forEach(message => {
+                        messageMap.set(message._id, message);
+                    });
+
+                    // Preserve messages received while the request
+                    // was running, provided they have not expired.
+                    previous.forEach(message => {
+
+                        const expiry = message.expiresAt
+                            ? new Date(message.expiresAt).getTime()
+                            : null;
+
+                        const stillVisible =
+                            !message.readAt ||
+                            (expiry !== null && expiry > now);
+
+                        if (
+                            stillVisible &&
+                            !messageMap.has(message._id)
+                        ) {
+                            messageMap.set(message._id, message);
+                        }
+
+                    });
+
+                    return Array.from(messageMap.values()).sort(
+                        (a, b) =>
+                            new Date(a.createdAt) -
+                            new Date(b.createdAt)
+                    );
+
+                });
+
+                console.log(
+                    "Messages synchronised successfully:",
+                    data.length
+                );
+
+            } catch (err) {
+
+                console.error("Message synchronisation failed:", err);
+
+                setError(err.message || "Unable to synchronise messages");
+
+            }
+
+        })();
+
+        refreshPromiseRef.current = request;
+
+        try {
+            await request;
+        } finally {
+            refreshPromiseRef.current = null;
+        }
+
+    }, [token]);
 
 
     // LOGIN
@@ -68,7 +167,7 @@ function App() {
                 throw new Error(data.message);
             }
 
-            // Authentication stays in memory only
+            // Authentication stays in memory only.
             setToken(data.token);
             setUser(data.user);
 
@@ -87,64 +186,30 @@ function App() {
     };
 
 
-    // CHAT INITIALISATION
+    // CHAT INITIALISATION AND BACKGROUND SYNCHRONISATION
     useEffect(() => {
 
         if (!token || !user) return;
 
         let active = true;
 
-        // Connect Socket.IO
+        // Connect Socket.IO.
         const socket = createSocket(token);
 
         socketRef.current = socket;
 
-        // Load previous 60 seconds of messages
-        const loadMessages = async () => {
 
-            try {
+        // Initial message retrieval.
+        refreshMessages();
 
-                const response = await fetch(
-                    `${API_URL}/api/messages`,
-                    {
-                        headers: {
-                            Authorization: `Bearer ${token}`
-                        }
-                    }
-                );
 
-                const data = await response.json();
-
-                if (!response.ok) {
-                    throw new Error(data.message);
-                }
-
-                if (active) {
-
-                    setMessages(data);
-
-                }
-
-            } catch (err) {
-
-                if (active) {
-                    setError(err.message);
-                }
-
-            }
-
-        };
-
-        loadMessages();
-
-        // Receive new messages instantly
+        // Receive new messages instantly.
         socket.on("newMessage", (message) => {
 
             if (!active) return;
 
             setMessages(previous => {
 
-                // Avoid duplicate messages
                 const exists = previous.some(
                     item => item._id === message._id
                 );
@@ -161,25 +226,191 @@ function App() {
 
         });
 
+
+        // Receive message read-status updates.
+        socket.on("messagesRead", (data) => {
+
+            if (!active) return;
+
+            const messageIds = new Set(
+                data.messageIds.map(id => id.toString())
+            );
+
+            setMessages(previous =>
+
+                previous.map(message => {
+
+                    if (messageIds.has(message._id.toString())) {
+
+                        return {
+                            ...message,
+                            readAt: data.readAt,
+                            expiresAt: data.expiresAt
+                        };
+
+                    }
+
+                    return message;
+
+                })
+
+            );
+
+        });
+
+
+        // Synchronise after Socket.IO connects or reconnects.
+        socket.on("connect", () => {
+
+            if (!active) return;
+
+            console.log("Socket connected. Refreshing messages.");
+
+            refreshMessages();
+
+        });
+
+
         socket.on("connect_error", (err) => {
 
             if (active) {
-                setError(err.message);
+                console.error("Socket connection error:", err.message);
             }
 
         });
+
+
+        // Detect when the mobile shortcut or browser tab
+        // returns to the foreground.
+        const handleAppResume = () => {
+
+            if (!active) return;
+
+            if (document.visibilityState !== "visible") return;
+
+            console.log("App resumed. Synchronising messages.");
+
+            // Reconnect if the mobile browser suspended the socket.
+            if (!socket.connected) {
+                socket.connect();
+            }
+
+            // Always retrieve the latest messages from MongoDB.
+            refreshMessages();
+
+        };
+
+
+        // App returns from background.
+        document.addEventListener(
+            "visibilitychange",
+            handleAppResume
+        );
+
+
+        // Handles restored pages, including mobile browsers.
+        window.addEventListener(
+            "pageshow",
+            handleAppResume
+        );
+
+
+        // Handles window/tab focus.
+        window.addEventListener(
+            "focus",
+            handleAppResume
+        );
+
+
+        // Handles restored internet connectivity.
+        window.addEventListener(
+            "online",
+            handleAppResume
+        );
+
 
         return () => {
 
             active = false;
 
+            socket.off("newMessage");
+            socket.off("messagesRead");
+            socket.off("connect");
+            socket.off("connect_error");
+
+            document.removeEventListener(
+                "visibilitychange",
+                handleAppResume
+            );
+
+            window.removeEventListener(
+                "pageshow",
+                handleAppResume
+            );
+
+            window.removeEventListener(
+                "focus",
+                handleAppResume
+            );
+
+            window.removeEventListener(
+                "online",
+                handleAppResume
+            );
+
             socket.disconnect();
 
-            socketRef.current = null;
+            if (socketRef.current === socket) {
+                socketRef.current = null;
+            }
 
         };
 
-    }, [token, user]);
+    }, [token, user, refreshMessages]);
+
+
+    // AUTOMATICALLY REMOVE EXPIRED MESSAGES
+    useEffect(() => {
+
+        const now = Date.now();
+
+        const expiryTimes = messages
+            .filter(message => message.expiresAt)
+            .map(message => new Date(message.expiresAt).getTime())
+            .filter(expiry => expiry > now);
+
+        if (expiryTimes.length === 0) {
+
+            // Remove messages that have already expired.
+            setMessages(previous =>
+                previous.filter(message =>
+                    !message.expiresAt ||
+                    new Date(message.expiresAt).getTime() > now
+                )
+            );
+
+            return;
+
+        }
+
+        const nextExpiry = Math.min(...expiryTimes);
+
+        const timeout = setTimeout(() => {
+
+            const currentTime = Date.now();
+
+            setMessages(previous =>
+                previous.filter(message =>
+                    !message.expiresAt ||
+                    new Date(message.expiresAt).getTime() > currentTime
+                )
+            );
+
+        }, Math.max(0, nextExpiry - now));
+
+        return () => clearTimeout(timeout);
+
+    }, [messages]);
 
 
     // SEND MESSAGE
@@ -256,7 +487,7 @@ function App() {
     };
 
 
-    // Format message time
+    // FORMAT MESSAGE TIME
     const formatTime = (date) => {
 
         return new Date(date).toLocaleTimeString([], {
