@@ -14,15 +14,15 @@ async function createUsers() {
         const users = [
 
             {
-                username: "usera",
-                password: "UserA@123",
-                displayName: "User A",
+                username: "Sami",
+                password: "IamSami@123",
+                displayName: "Sami",
                 role: "userA"
             },
 
             {
-                username: "userb",
-                password: "UserB@123",
+                username: "PK",
+                password: "IamPK@787898",
                 displayName: "User B",
                 role: "userB"
             }

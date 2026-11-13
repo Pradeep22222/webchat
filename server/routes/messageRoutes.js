@@ -1,3 +1,4 @@
+
 const express = require("express");
 
 const Message = require("../models/Message");
@@ -7,19 +8,41 @@ const auth = require("../middleware/auth");
 
 const router = express.Router();
 
-// GET messages from the previous 60 seconds
+const MESSAGE_EXPIRY_SECONDS = 60;
+
+
+// GET messages for the authenticated user
 router.get("/", auth, async (req, res) => {
 
     try {
 
-        const oneMinuteAgo = new Date(
-            Date.now() - 60 * 1000
-        );
+        const currentUserId = req.user.id;
+        const now = new Date();
+
+        // Return:
+        // 1. All unread messages.
+        // 2. Read messages that have not expired yet.
 
         const messages = await Message.find({
-            createdAt: {
-                $gte: oneMinuteAgo
-            }
+
+            $and: [
+
+                {
+                    $or: [
+                        { sender: currentUserId },
+                        { recipient: currentUserId }
+                    ]
+                },
+
+                {
+                    $or: [
+                        { readAt: null },
+                        { expiresAt: { $gt: now } }
+                    ]
+                }
+
+            ]
+
         })
         .sort({ createdAt: 1 })
         .populate("sender", "username displayName role")
@@ -59,7 +82,7 @@ router.post("/", auth, async (req, res) => {
             });
         }
 
-        // Identify the other user
+        // Identify the other user.
         const recipient = await User.findOne({
             _id: { $ne: req.user.id }
         });
@@ -70,29 +93,92 @@ router.post("/", auth, async (req, res) => {
             });
         }
 
-        // Save message in MongoDB
+        const now = new Date();
+
+        const expiryTime = new Date(
+            now.getTime() + MESSAGE_EXPIRY_SECONDS * 1000
+        );
+
+        // Find all previous unread messages addressed to
+        // the current user.
+        //
+        // Sending a reply indicates that the user has now
+        // read the previous incoming messages.
+
+        const unreadMessages = await Message.find({
+
+            recipient: req.user.id,
+
+            readAt: null
+
+        }).select("_id");
+
+        const unreadMessageIds = unreadMessages.map(
+            msg => msg._id
+        );
+
+        // Mark previous incoming messages as read.
+        // Their 60-second countdown starts now.
+
+        if (unreadMessageIds.length > 0) {
+
+            await Message.updateMany(
+
+                {
+                    _id: { $in: unreadMessageIds }
+                },
+
+                {
+                    $set: {
+                        readAt: now,
+                        expiresAt: expiryTime
+                    }
+                }
+
+            );
+
+        }
+
+        // Save the new outgoing message.
+        // It remains unread for its recipient until they reply.
+
         const newMessage = await Message.create({
 
             sender: req.user.id,
 
             recipient: recipient._id,
 
-            message: message,
+            message: message.trim(),
 
-            createdAt: new Date()
+            readAt: null,
+
+            expiresAt: null,
+
+            createdAt: now
 
         });
 
-        // Populate sender and recipient information
+        // Populate sender and recipient information.
         const populatedMessage = await Message.findById(
             newMessage._id
         )
         .populate("sender", "username displayName role")
         .populate("recipient", "username displayName role");
 
-        // Immediately broadcast to both connected users
+        // Broadcast updated read status to connected clients.
         const io = req.app.get("io");
 
+        if (unreadMessageIds.length > 0) {
+
+            io.to("private-chat").emit("messagesRead", {
+                messageIds: unreadMessageIds.map(id => id.toString()),
+                readAt: now,
+                expiresAt: expiryTime
+            });
+
+        }
+
+        // Broadcast the new message.
         io.to("private-chat").emit(
             "newMessage",
             populatedMessage

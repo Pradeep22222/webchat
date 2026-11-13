@@ -1,3 +1,4 @@
+
 const mongoose = require("mongoose");
 
 const messageSchema = new mongoose.Schema({
@@ -19,12 +20,26 @@ const messageSchema = new mongoose.Schema({
         maxlength: 5000
     },
 
+    // Null means the recipient has not read the message yet.
+    readAt: {
+        type: Date,
+        default: null
+    },
+
+    // Null means the message has not started its expiry countdown.
+    expiresAt: {
+        type: Date,
+        default: null
+    },
+
     createdAt: {
         type: Date,
         default: Date.now
     }
 });
 
-messageSchema.index({ createdAt: 1 });
+// Indexes for efficient message retrieval.
+messageSchema.index({ sender: 1, recipient: 1, createdAt: 1 });
+messageSchema.index({ recipient: 1, readAt: 1, expiresAt: 1 });
 
 module.exports = mongoose.model("Message", messageSchema);
