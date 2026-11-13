@@ -280,7 +280,7 @@ function App() {
                         <span>💬</span>
                     </div>
 
-                    <h1>Private Chat</h1>
+                    <h1>Share what is been happening</h1>
 
                     <p className="login-subtitle">
                         Sign in to continue your conversation
@@ -359,10 +359,10 @@ function App() {
                         </div>
 
                         <div>
-                            <h2>Private Chat</h2>
+                            <h2>Hey ! Is life going amazing?</h2>
 
                             <p>
-                                Conversation between the users
+                                Explore the life
                             </p>
                         </div>
 
